@@ -18,7 +18,7 @@
       <div class="flex items-center gap-4">
         <span class="font-bold text-white tracking-wide">UNIVERSITI TENAGA NASIONAL</span>
         <span class="hidden sm:inline text-blue-300/50">|</span>
-        <span class="hidden sm:inline text-blue-100/80">Putrajaya Campus •</span>
+        <span class="hidden sm:inline text-blue-100/80">Putrajaya Campus</span>
       </div>
       <div class="flex items-center gap-3">
         <span class="px-2.5 py-0.5 rounded bg-[#E65028] text-white font-bold tracking-wide text-[10px] italic">
@@ -170,7 +170,7 @@
           <!-- Form Body -->
           <form id="itemForm" class="p-6 space-y-4">
             <p class="text-xs text-slate-500 bg-blue-50/70 border border-blue-100 rounded-xl px-3.5 py-2.5">
-              Photo uploads to <strong class="text-[#1E3E8A]">Cloudinary</strong> object storage; metadata saves to <strong class="text-[#1E3E8A]">Firebase Firestore</strong>.
+              Only your browser session can mark your post as resolved or delete it—no account login needed.
             </p>
 
             <!-- Report Type Toggle -->
@@ -310,6 +310,8 @@
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged }
+      from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
     import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, updateDoc, deleteDoc, doc, serverTimestamp }
       from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
@@ -324,16 +326,31 @@
       measurementId: "G-LMVT5RZ0DC"
     };
 
-    // Cloudinary Credentials
+    // Cloudinary Credentials (Isolated UNITEN Lost & Found Folder)
     const CLOUD_NAME = "exlp6wmt";
-    const UPLOAD_PRESET = "xpendent_unsigned";
+    const UPLOAD_PRESET = "uniten_lost_found_preset";
 
     const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
     const db = getFirestore(app);
+
+    let currentUserUid = null;
     let allItems = [];
     let currentFilter = "ALL";
     let searchQuery = "";
-    let isPanelOpen = false; // Default closed
+    let isPanelOpen = false;
+
+    // Silent Anonymous Auth (Zero login screen, tracks post ownership per browser)
+    signInAnonymously(auth).catch((err) => {
+      console.error("Anonymous sign-in failed (enable Anonymous provider in Firebase Auth):", err);
+    });
+
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        currentUserUid = user.uid;
+        renderItems();
+      }
+    });
 
     // Inline Left Push-Panel Toggle
     window.toggleReportPanel = (forceState) => {
@@ -345,12 +362,10 @@
       const toolbarBtn = document.getElementById("toolbarToggleBtn");
 
       if (isPanelOpen) {
-        // Expand left panel smoothly & push right content
         panel.classList.remove("lg:w-0", "max-h-0", "opacity-0", "lg:mr-0", "mb-0");
         panel.classList.add("lg:w-[390px]", "max-h-[1200px]", "opacity-100", "lg:mr-7", "mb-6", "lg:mb-0");
         panel.setAttribute("aria-hidden", "false");
 
-        // Adjust cards grid from 3 columns to 2 columns while pushed right
         grid.classList.remove("lg:grid-cols-3");
         grid.classList.add("lg:grid-cols-2");
 
@@ -358,12 +373,10 @@
         headerText.textContent = "Close Form";
         toolbarBtn.textContent = "Close Form";
       } else {
-        // Collapse left panel smoothly & restore full width
         panel.classList.add("lg:w-0", "max-h-0", "opacity-0", "lg:mr-0", "mb-0");
         panel.classList.remove("lg:w-[390px]", "max-h-[1200px]", "opacity-100", "lg:mr-7", "mb-6", "lg:mb-0");
         panel.setAttribute("aria-hidden", "true");
 
-        // Restore 3-column grid
         grid.classList.add("lg:grid-cols-3");
         grid.classList.remove("lg:grid-cols-2");
 
@@ -408,7 +421,6 @@
       const formData = new FormData();
       formData.append("file", file);
       formData.append("upload_preset", UPLOAD_PRESET);
-      formData.append("folder", "uniten_lost_found");
 
       const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, {
         method: "POST",
@@ -417,7 +429,6 @@
       if (!res.ok) throw new Error("Cloudinary upload failed");
       const data = await res.json();
 
-      // Lightweight metadata stored in Firestore
       return {
         file_url: data.secure_url,
         size: data.bytes,
@@ -439,6 +450,12 @@
       msg.textContent = "1/2 Uploading photo to Cloudinary...";
 
       try {
+        // Ensure anonymous UID exists before writing
+        if (!auth.currentUser) {
+          const cred = await signInAnonymously(auth);
+          currentUserUid = cred.user.uid;
+        }
+
         const attachmentMeta = await uploadToCloudinary(file);
         msg.textContent = "2/2 Saving metadata to Firestore...";
 
@@ -448,6 +465,7 @@
           location: document.getElementById("location").value.trim(),
           contact: document.getElementById("contact").value.trim(),
           resolved: false,
+          creator_uid: currentUserUid,
           attachment: attachmentMeta,
           createdAt: serverTimestamp()
         });
@@ -456,7 +474,7 @@
         imagePreview.classList.add("hidden");
         uploadPlaceholder.querySelector("p").textContent = "Click to upload item photo";
         msg.textContent = "";
-        toggleReportPanel(false); // Collapse left panel after posting
+        toggleReportPanel(false);
         showToast("Report posted to UNITEN Lost & Found!");
       } catch (err) {
         console.error(err);
@@ -495,11 +513,21 @@
     };
 
     window.markResolved = async (id) => {
+      const target = allItems.find(i => i.id === id);
+      if (!target || target.creator_uid !== currentUserUid) {
+        showToast("Only the original poster can mark this resolved.");
+        return;
+      }
       await updateDoc(doc(db, "lost_found_items", id), { resolved: true });
       showToast("Marked as claimed/resolved");
     };
 
     window.deleteItem = async (id) => {
+      const target = allItems.find(i => i.id === id);
+      if (!target || target.creator_uid !== currentUserUid) {
+        showToast("Only the original poster can delete this report.");
+        return;
+      }
       if (confirm("Remove this post from Firestore?")) {
         await deleteDoc(doc(db, "lost_found_items", id));
         showToast("Report deleted");
@@ -537,7 +565,11 @@
       }
 
       emptyState.classList.add("hidden");
-      grid.innerHTML = filtered.map(item => `
+      grid.innerHTML = filtered.map(item => {
+        const isOwner = Boolean(currentUserUid && item.creator_uid === currentUserUid);
+        const safeContact = (item.contact || "").replace(/'/g, "\\'");
+
+        return `
         <article class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs hover:shadow-md transition flex flex-col">
           <div class="relative bg-slate-100">
             <img src="${item.attachment?.file_url}" alt="${item.title}" class="w-full h-48 object-cover ${item.resolved ? "opacity-60 grayscale" : ""}" />
@@ -546,6 +578,11 @@
                 ? "bg-[#E65028] text-white"
                 : "bg-[#1E3E8A] text-white"
             }">${item.status}</span>
+            ${isOwner ? `
+              <span class="absolute top-3 right-3 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white shadow-xs">
+                Your Post
+              </span>
+            ` : ""}
             <span class="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-md bg-white/95 backdrop-blur-xs text-[10px] font-semibold text-slate-700 border border-slate-200">
               ${((item.attachment?.size || 0) / 1024).toFixed(1)} KB • ${item.attachment?.mime_type || "image"}
             </span>
@@ -555,16 +592,18 @@
             <div>
               <div class="flex items-start justify-between gap-2">
                 <h3 class="font-bold text-base text-[#162D66] ${item.resolved ? "line-through text-slate-400" : ""}">${item.title}</h3>
-                <button onclick="deleteItem('${item.id}')" title="Delete item" class="text-slate-400 hover:text-[#E65028] text-xs px-1.5 py-0.5 rounded transition">
-                  ✕
-                </button>
+                ${isOwner ? `
+                  <button onclick="deleteItem('${item.id}')" title="Delete your post" class="text-slate-400 hover:text-[#E65028] text-xs px-1.5 py-0.5 rounded transition cursor-pointer">
+                    ✕
+                  </button>
+                ` : ""}
               </div>
 
               <div class="mt-2.5 space-y-1 text-xs text-slate-600">
                 <p><span class="font-bold text-[#1E3E8A]">Location:</span> ${item.location}</p>
                 <div class="flex items-center justify-between gap-2">
                   <p class="truncate"><span class="font-bold text-[#1E3E8A]">Contact:</span> ${item.contact}</p>
-                  <button onclick="copyContact('${item.contact}')" class="shrink-0 text-[11px] font-bold text-[#1E3E8A] hover:bg-blue-100 bg-blue-50 px-2 py-0.5 rounded-md transition">
+                  <button onclick="copyContact('${safeContact}')" class="shrink-0 text-[11px] font-bold text-[#1E3E8A] hover:bg-blue-100 bg-blue-50 px-2 py-0.5 rounded-md transition cursor-pointer">
                     Copy
                   </button>
                 </div>
@@ -576,13 +615,14 @@
                 <span class="w-2 h-2 rounded-full ${item.resolved ? "bg-emerald-500" : "bg-[#E65028]"}"></span>
                 ${item.resolved ? "Claimed / Resolved" : "Active"}
               </span>
-              ${!item.resolved
-                ? `<button onclick="markResolved('${item.id}')" class="text-xs font-bold bg-[#1E3E8A] hover:bg-[#162D66] text-white px-3 py-1.5 rounded-lg transition">Mark Resolved</button>`
+              ${!item.resolved && isOwner
+                ? `<button onclick="markResolved('${item.id}')" class="text-xs font-bold bg-[#1E3E8A] hover:bg-[#162D66] text-white px-3 py-1.5 rounded-lg transition cursor-pointer">Mark Resolved</button>`
                 : ""}
             </div>
           </div>
         </article>
-      `).join("");
+      `;
+      }).join("");
     }
   </script>
 </body>
