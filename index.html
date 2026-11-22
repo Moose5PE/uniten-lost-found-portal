@@ -303,6 +303,31 @@
     </div>
   </footer>
 
+  <!-- Full-Photo Lightbox Modal -->
+  <div id="photoModal" onclick="closePhotoModal()"
+    class="fixed inset-0 bg-slate-950/85 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+    <div onclick="event.stopPropagation()"
+      class="relative max-w-4xl w-full bg-white rounded-2xl overflow-hidden shadow-2xl border border-slate-200">
+      
+      <!-- Modal Header -->
+      <div class="bg-[#162D66] text-white px-5 py-3.5 flex items-center justify-between gap-4 border-b-2 border-[#E65028]">
+        <div class="min-w-0">
+          <h3 id="modalTitle" class="font-bold text-sm sm:text-base truncate">Item Photo</h3>
+          <p id="modalLocation" class="text-xs text-blue-200 truncate"></p>
+        </div>
+        <button type="button" onclick="closePhotoModal()" aria-label="Close full photo"
+          class="w-8 h-8 rounded-lg bg-white/15 hover:bg-[#E65028] text-white flex items-center justify-center text-sm font-bold transition cursor-pointer shrink-0">
+          ✕
+        </button>
+      </div>
+
+      <!-- Uncropped Full Image -->
+      <div class="bg-slate-900 flex items-center justify-center max-h-[80vh] overflow-auto">
+        <img id="modalImage" src="" alt="Full Item Photo" class="max-h-[80vh] w-auto object-contain" />
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toast" class="fixed bottom-5 right-5 bg-[#162D66] text-white text-xs font-semibold px-4 py-3 rounded-xl shadow-lg border-l-4 border-[#E65028] opacity-0 pointer-events-none transition-opacity duration-200 z-50">
     Copied to clipboard!
@@ -352,6 +377,25 @@
       }
     });
 
+    // Full-Photo Lightbox Open & Close
+    window.openPhotoModal = (el) => {
+      const url = el.dataset.url;
+      if (!url) return;
+      const modal = document.getElementById("photoModal");
+      document.getElementById("modalImage").src = url;
+      document.getElementById("modalTitle").textContent = el.dataset.title || "Item Photo";
+      document.getElementById("modalLocation").textContent = el.dataset.location ? `Location: ${el.dataset.location}` : "";
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    };
+
+    window.closePhotoModal = () => {
+      const modal = document.getElementById("photoModal");
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+      document.getElementById("modalImage").src = "";
+    };
+
     // Inline Left Push-Panel Toggle
     window.toggleReportPanel = (forceState) => {
       isPanelOpen = typeof forceState === "boolean" ? forceState : !isPanelOpen;
@@ -386,10 +430,15 @@
       }
     };
 
-    // Close Panel with Escape Key
+    // Close Photo Lightbox or Report Panel with Escape Key
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && isPanelOpen) {
-        toggleReportPanel(false);
+      if (e.key === "Escape") {
+        const modal = document.getElementById("photoModal");
+        if (!modal.classList.contains("hidden")) {
+          closePhotoModal();
+        } else if (isPanelOpen) {
+          toggleReportPanel(false);
+        }
       }
     });
 
@@ -546,6 +595,15 @@
       setTimeout(() => toast.classList.add("opacity-0"), 2200);
     }
 
+    function escapeAttr(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
     function renderItems() {
       const grid = document.getElementById("itemsGrid");
       const emptyState = document.getElementById("emptyState");
@@ -571,8 +629,22 @@
 
         return `
         <article class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs hover:shadow-md transition flex flex-col">
-          <div class="relative bg-slate-100">
-            <img src="${item.attachment?.file_url}" alt="${item.title}" class="w-full h-48 object-cover ${item.resolved ? "opacity-60 grayscale" : ""}" />
+          <div onclick="openPhotoModal(this)"
+            data-url="${escapeAttr(item.attachment?.file_url)}"
+            data-title="${escapeAttr(item.title)}"
+            data-location="${escapeAttr(item.location)}"
+            title="Click to view full photo"
+            class="relative bg-slate-100 overflow-hidden group cursor-zoom-in">
+            <img src="${item.attachment?.file_url}" alt="${escapeAttr(item.title)}"
+              class="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-300 ${item.resolved ? "opacity-60 grayscale" : ""}" />
+            
+            <!-- Hover Overlay Pill -->
+            <div class="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/25 transition-colors flex items-center justify-center">
+              <span class="opacity-0 group-hover:opacity-100 transition-opacity bg-[#162D66]/90 text-white text-[11px] font-bold px-3 py-1.5 rounded-full shadow-md border border-white/20">
+                View Full Photo
+              </span>
+            </div>
+
             <span class="absolute top-3 left-3 px-2.5 py-1 rounded-full text-[11px] font-bold shadow-xs ${
               item.status === "LOST"
                 ? "bg-[#E65028] text-white"
